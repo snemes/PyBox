@@ -173,18 +173,18 @@ class PyTrampoline(object):
             if not (0<= arg <= 0xffffffff):
                 raise ValueError, "Arguments must be in [0, 2**32]"
             trampoline += "\x68"
-            trampoline += struct.pack("I", arg)
+            trampoline += struct.pack("I", arg & 0xffffffff)
 
         # PUSH identifier
         trampoline += "\x68"
-        trampoline += struct.pack("I", self.identifier)
+        trampoline += struct.pack("I", self.identifier & 0xffffffff)
 
         # CALL to generic C callback handler
         trampoline += "\xE8"
         relative_callback = pybox.CB_ADDR - \
                             (ctypes.addressof(self.trampoline) + \
                              len(trampoline) + 4)
-        trampoline += struct.pack("I", relative_callback)
+        trampoline += struct.pack("I", relative_callback & 0xffffffff)
 
         # FIXME: remove - also in calc size
         #   remove all arguments
@@ -294,7 +294,7 @@ class PyTrampoline(object):
         relative_jmp_target = follow_address - \
                               (ctypes.addressof(self.trampoline) + \
                                len(trampoline) + 4)
-        trampoline += struct.pack("I", relative_jmp_target)
+        trampoline += struct.pack("I", relative_jmp_target & 0xffffffff)
 
         if len(trampoline) > tramp_size:
             logging.critical("Trampoline size calculation failed. Please "\
@@ -346,7 +346,7 @@ class PyTrampoline(object):
         """
         orig_target = orig_base + orig_imm
         relocated_offset = orig_target - tramp_addr
-        return struct.pack("I", relocated_offset)
+        return struct.pack("I", relocated_offset & 0xffffffff)
 
     @staticmethod   
     def default_callback(execution_context):
@@ -400,7 +400,7 @@ class PyFunctionEntryHook(PyTrampoline):
 
         # overwrite the original code (write hook)
         tramp_offset = ctypes.addressof(self.trampoline) - (func_entry_addr + 5)
-        hook_code = "\xE9" + struct.pack("I", tramp_offset)
+        hook_code = "\xE9" + struct.pack("I", tramp_offset & 0xffffffff)
         hook_code += "\x90"*(len(save_code)-5)
         #hook_code = "\xeb\xfe" + hook_code
 
@@ -541,7 +541,7 @@ class RegisterContext(object):
                               "0xFFFFFFFF"
 
         offset = RegisterContext.offsets[reg_name]
-        reg_val = struct.pack("I", value)
+        reg_val = struct.pack("I", value & 0xffffffff)
         memorymanager.write_mem(self.base_addr + offset, reg_val)
 
     def __getattribute__(self, name):
@@ -590,7 +590,7 @@ class ExecutionContext(object):
         if not (0<= new_ret_addr <= 0xffffffff):
             raise ValueError, "Return address must be inbetween 0 and "\
                               "0xFFFFFFFF"
-        rval = struct.pack("I", new_ret_addr)
+        rval = struct.pack("I", new_ret_addr & 0xffffffff)
         return memorymanager.write_mem(self.retaddr_p, rval)
 
     def get_arg(self, arg_index):
@@ -613,7 +613,7 @@ class ExecutionContext(object):
         """
         if not (0<= value <= 0xffffffff):
             raise ValueError, "Parameter must be inbetween 0 and 0xFFFFFFFF"
-        rval = struct.pack("I", value)
+        rval = struct.pack("I", value & 0xffffffff)
         
         return memorymanager.write_mem(self.stack_params + (arg_index <<2),
                                        rval)

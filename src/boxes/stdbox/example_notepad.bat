@@ -29,8 +29,8 @@ GOTO EndComment
 ########################################################################
 :EndComment
 
-set PYTHON=C:\Python26
+set PYTHON=C:\Python27
 set PYTHONPATH=C:\PyBox\trunk
 set PYBOX_FILE=.\starter.py
-set PYBOX_LOG=C:\PyBox\log
+set PYBOX_LOG=C:\PyBox\log\
 %PYTHON%\python.exe %PYTHONPATH%\src\injector.py --executable "%WINDIR%\system32\notepad.exe" --module %PYTHONPATH%\DLL\PyBox.dll
