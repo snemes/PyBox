@@ -1,26 +1,11 @@
-//#include <Tlhelp32.h>
 #include <stdio.h>
 #include <windows.h>
 #include <time.h>
-#include <String.h>
-
+#include <string.h>
 #include <map>
+#include "Python.h"
 
-// This is a Workaround for a problem caused by python.h in combination with VC++
-#ifdef _DEBUG
-#  undef _DEBUG
-#  include "Python.h"
-#  define DEBUG
-#  define _DEBUG
-#else
-#  include "Python.h"
-#endif
-
-
-
-// End of Workaround
-
-FILE *logFile = NULL;		// Pointer to logfile
+FILE *logFile = NULL;        // Pointer to logfile
 static int debugMsgs = 0;
 char *LOG_FILE_PATH = NULL;
 char *PYBOX_FILE = NULL;
@@ -57,25 +42,25 @@ CRITICAL_SECTION python_GIL_section;
 #endif
 
 
-void writeLog(char *msg) {
-	char timestamp_buf[128];
+void writeLog(const char *msg) {
+    char timestamp_buf[128];
 
-	_snprintf_s(timestamp_buf, sizeof(timestamp_buf)-1, "%0.3fs PyBox.dll: ", (1.0 * clock() / CLOCKS_PER_SEC));
-	OutputDebugStringA(timestamp_buf);
-	OutputDebugStringA(msg);
-	OutputDebugStringA("\n");	
+    snprintf(timestamp_buf, sizeof(timestamp_buf)-1, "%0.3fs PyBox.dll: ", (1.0 * clock() / CLOCKS_PER_SEC));
+    OutputDebugStringA(timestamp_buf);
+    OutputDebugStringA(msg);
+    OutputDebugStringA("\n");    
 }
 
-void writeDebugMsg(char *msg) {
-	if(debugMsgs) {
-		writeLog(msg);
-	}
+void writeDebugMsg(const char *msg) {
+    if(debugMsgs) {
+        writeLog(msg);
+    }
 }
 
 
 
 static int getTID() {
-	return GetCurrentThreadId();	
+    return GetCurrentThreadId();    
 }
 
 
@@ -91,63 +76,61 @@ static int getTID() {
 */
 
 void __stdcall genericCallback(unsigned int originAddr, unsigned int check_lock) {
-	
+    
 #ifdef USE_THREADS
-	DWORD tid = GetCurrentThreadId();
-	INT2BOOLMAP::iterator lm_iter;
+    DWORD tid = GetCurrentThreadId();
+    INT2BOOLMAP::iterator lm_iter;
 
-	if (globalLock)
-		return;  //stop if global lock is set
+    if (globalLock)
+        return;  //stop if global lock is set
 
-	if (check_lock) {	
+    if (check_lock) {    
 
-		EnterCriticalSection(&thread_lock_section);
-				
-		lm_iter = lockmap.find(tid);
-		if (lm_iter == lockmap.end()){
-			INT2BOOLPAIR new_elem = INT2BOOLPAIR( tid, FALSE);
-			lm_iter = lockmap.insert(new_elem).first;
-		}
+        EnterCriticalSection(&thread_lock_section);
+                
+        lm_iter = lockmap.find(tid);
+        if (lm_iter == lockmap.end()){
+            INT2BOOLPAIR new_elem = INT2BOOLPAIR( tid, FALSE);
+            lm_iter = lockmap.insert(new_elem).first;
+        }
 
-		if ((lm_iter == lockmap.end()) || ( (*lm_iter).second == TRUE) ) {
-			LeaveCriticalSection(&thread_lock_section);
-			return;
-		}
-		(*lm_iter).second = TRUE;
+        if ((lm_iter == lockmap.end()) || ( (*lm_iter).second == TRUE) ) {
+            LeaveCriticalSection(&thread_lock_section);
+            return;
+        }
+        (*lm_iter).second = TRUE;
 
-		LeaveCriticalSection(&thread_lock_section);
-	}
+        LeaveCriticalSection(&thread_lock_section);
+    }
 #else
-	if (check_lock) {
-		if(callbackLock) {
-			return;
-		} else {
-			callbackLock = 1;
-		}	
-	}
+    if (check_lock) {
+        if(callbackLock) {
+            return;
+        } else {
+            callbackLock = 1;
+        }    
+    }
 #endif
 
-	//char msg[64];
-	int ebpAddr = 0;
-	int temp = 0;
-	int stackOffset = 8;
+    //char msg[64];
+    int ebpAddr = 0;
+    int temp = 0;
+    int stackOffset = 8;
 
 #ifdef USE_THREADS
-	EnterCriticalSection(&python_GIL_section);
-	PyGILState_STATE state = PyGILState_Ensure();
+    EnterCriticalSection(&python_GIL_section);
+    PyGILState_STATE state = PyGILState_Ensure();
 #endif
 
-	__asm {
-		mov eax, ebp;
-		mov ebpAddr, eax;
-	}
+    __asm__ volatile ("mov %0,ebp" : "=g"(ebpAddr));
+
     /*
-	writeLog("###############################");
-	sprintf_s(msg, 64, "Reporting callback.");
-	writeLog(msg);
-	sprintf_s(msg, 64, "hookedAddr: 0x%x - ebpAddr: 0x%x", originAddr, ebpAddr);
-	writeLog(msg);	
-	*/
+    writeLog("###############################");
+    snprintf(msg, 64, "Reporting callback.");
+    writeLog(msg);
+    snprintf(msg, 64, "hookedAddr: 0x%x - ebpAddr: 0x%x", originAddr, ebpAddr);
+    writeLog(msg);    
+    */
 
     PyObject *argList = NULL;
     PyObject *result = NULL;
@@ -157,37 +140,37 @@ void __stdcall genericCallback(unsigned int originAddr, unsigned int check_lock)
     result = PyEval_CallObject(pythonCallbackHandler, argList);
     Py_DECREF(argList);
 
-	if (result == NULL) {
-		writeLog("*** ERROR *** genericCallback: Python callback failed");
-		PyErr_Print();
+    if (result == NULL) {
+        writeLog("*** ERROR *** genericCallback: Python callback failed");
+        PyErr_Print();
 
 #ifdef USE_THREADS
-		(*lm_iter).second = FALSE;
-		PyGILState_Release(state);
-		LeaveCriticalSection(&python_GIL_section);
+        (*lm_iter).second = FALSE;
+        PyGILState_Release(state);
+        LeaveCriticalSection(&python_GIL_section);
 #endif
         return; // Pass error back
-	} else {	    
-	}
+    } else {        
+    }
 
-	Py_DECREF(result);
+    Py_DECREF(result);
 
 #ifdef USE_THREADS
-	PyGILState_Release(state);
-	LeaveCriticalSection(&python_GIL_section);
+    PyGILState_Release(state);
+    LeaveCriticalSection(&python_GIL_section);
 
-	if (check_lock) {
-		EnterCriticalSection(&thread_lock_section);
-		(*lm_iter).second = FALSE;
-		LeaveCriticalSection(&thread_lock_section);
-	}
+    if (check_lock) {
+        EnterCriticalSection(&thread_lock_section);
+        (*lm_iter).second = FALSE;
+        LeaveCriticalSection(&thread_lock_section);
+    }
 #else
-	if (check_lock)
-		callbackLock = 0;
+    if (check_lock)
+        callbackLock = 0;
 #endif
-	
+    
 
-	return;
+    return;
 }
 
 
@@ -205,15 +188,15 @@ void __stdcall genericCallback(unsigned int originAddr, unsigned int check_lock)
    to the corresponding python hook
 */
 static PyObject *pybox_attachPythonCallback(PyObject *dummy, PyObject *args) {
-	writeDebugMsg("emb.attachPythonCallback called");
+    writeDebugMsg("emb.attachPythonCallback called");
     PyObject *result =  PyInt_FromLong(1);
     PyObject *temp = NULL;
 
     if (PyArg_ParseTuple(args, "O:set_callback", &temp)) {
         if (!PyCallable_Check(temp)) {
             PyErr_SetString(PyExc_TypeError, "parameter must be callable");
-			writeLog("*** ERROR: parameter not callable");
-			result = PyInt_FromLong(2);
+            writeLog("*** ERROR: parameter not callable");
+            result = PyInt_FromLong(2);
             return NULL;
         }
         Py_XINCREF(temp);         /* Add a reference to new callback */
@@ -221,10 +204,10 @@ static PyObject *pybox_attachPythonCallback(PyObject *dummy, PyObject *args) {
         pythonCallbackHandler = temp;       /* Remember new callback */
         /* Boilerplate to return "None" */
         Py_INCREF(Py_None);
-		result = PyInt_FromLong(0);
-		writeDebugMsg("emb.attachPythonCallback: Python Callback Handler installed.");
+        result = PyInt_FromLong(0);
+        writeDebugMsg("emb.attachPythonCallback: Python Callback Handler installed.");
     }
-	writeDebugMsg("emb.attachPythonCallback left");
+    writeDebugMsg("emb.attachPythonCallback left");
     return result;
 }
 
@@ -232,84 +215,84 @@ static PyObject *pybox_attachPythonCallback(PyObject *dummy, PyObject *args) {
 
 /*  pybox_enumerateExportedFunctions
 
-	Python-name: dllEnumerateExportedFunctions
+    Python-name: dllEnumerateExportedFunctions
 
     method to enumerate all functionNames + addresses for given module name 
-	based on the export table of the module in PE header (from memory)
+    based on the export table of the module in PE header (from memory)
 */
 static PyObject* pybox_enumerateExportedFunctions(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.enumerateExportedFunctions called");
-	char msg[128];
-	char *dllName;
-	if(!PyArg_ParseTuple(args, "s", &dllName)) {
-   	     return NULL;
-	}
-	sprintf_s(msg, 128, "emb.enumerateExportedFunctions DLL to analyze %s", dllName);
-	writeDebugMsg(msg);
+    writeDebugMsg("emb.enumerateExportedFunctions called");
+    char msg[128];
+    char *dllName;
+    if(!PyArg_ParseTuple(args, "s", &dllName)) {
+            return NULL;
+    }
+    snprintf(msg, 128, "emb.enumerateExportedFunctions DLL to analyze %s", dllName);
+    writeDebugMsg(msg);
 
-	BYTE *hMod = (BYTE*)GetModuleHandleA(dllName);
-	if(!hMod) {
-		sprintf_s(msg, 128, "*** ERROR *** enumerateExportedFunctions: handle for [%s] is NULL!", dllName);
-		writeLog(msg);
-		PyObject *retAddresses = PyList_New(1);
-		PyObject *addr = PyInt_FromLong(0);
-		PyList_SET_ITEM(retAddresses, 0, addr);
-		return retAddresses;
-	}
-	sprintf_s(msg, 128, "emb.enumerateExportedFunctions moduleHandle 0x%x\n", hMod);
-	writeDebugMsg(msg);
+    BYTE *hMod = (BYTE*)GetModuleHandleA(dllName);
+    if(!hMod) {
+        snprintf(msg, 128, "*** ERROR *** enumerateExportedFunctions: handle for [%s] is NULL!", dllName);
+        writeLog(msg);
+        PyObject *retAddresses = PyList_New(1);
+        PyObject *addr = PyInt_FromLong(0);
+        PyList_SET_ITEM(retAddresses, 0, addr);
+        return retAddresses;
+    }
+    snprintf(msg, 128, "emb.enumerateExportedFunctions moduleHandle 0x%x\n", hMod);
+    writeDebugMsg(msg);
 
-	//parse export table
-	IMAGE_NT_HEADERS *pnt = (IMAGE_NT_HEADERS*)&hMod[PIMAGE_DOS_HEADER(hMod)->e_lfanew];
-	IMAGE_EXPORT_DIRECTORY *exp = (IMAGE_EXPORT_DIRECTORY*)&hMod[pnt->OptionalHeader.DataDirectory->VirtualAddress];
-	DWORD *dwFunctions = (DWORD*)&hMod[exp->AddressOfNames];
-	DWORD *dwFunctionAddresses = (DWORD*)&hMod[exp->AddressOfFunctions];
-	WORD *dwOrdinals = (WORD*) &hMod[exp->AddressOfNameOrdinals];
+    //parse export table
+    IMAGE_NT_HEADERS *pnt = (IMAGE_NT_HEADERS*)&hMod[PIMAGE_DOS_HEADER(hMod)->e_lfanew];
+    IMAGE_EXPORT_DIRECTORY *exp = (IMAGE_EXPORT_DIRECTORY*)&hMod[pnt->OptionalHeader.DataDirectory->VirtualAddress];
+    DWORD *dwFunctions = (DWORD*)&hMod[exp->AddressOfNames];
+    DWORD *dwFunctionAddresses = (DWORD*)&hMod[exp->AddressOfFunctions];
+    WORD *dwOrdinals = (WORD*) &hMod[exp->AddressOfNameOrdinals];
 
-	//FIXME: use instead of other two arrays
-	PyObject *entries = PyList_New(exp->NumberOfFunctions);
+    //FIXME: use instead of other two arrays
+    PyObject *entries = PyList_New(exp->NumberOfFunctions);
 
-	PyObject *retAddresses = PyList_New(0);
-	PyObject *retNames = PyList_New(0);
+    PyObject *retAddresses = PyList_New(0);
+    PyObject *retNames = PyList_New(0);
 
-	for (DWORD ctr = 0; ctr < exp->NumberOfFunctions; ctr++) {
-		
-		WORD index = dwOrdinals[ctr];
-		WORD ordinal = index  + (WORD)exp->Base;
-		PyObject *name;
+    for (DWORD ctr = 0; ctr < exp->NumberOfFunctions; ctr++) {
+        
+        WORD index = dwOrdinals[ctr];
+        WORD ordinal = index  + (WORD)exp->Base;
+        PyObject *name;
 
-		if (index >= exp->NumberOfFunctions) {
-			continue; //invalid/empty entry
-		}
+        if (index >= exp->NumberOfFunctions) {
+            continue; //invalid/empty entry
+        }
 
-		unsigned int convAddr = (unsigned int)&hMod[dwFunctionAddresses[index]];
-		PyObject *addr = PyInt_FromLong(convAddr);
+        unsigned int convAddr = (unsigned int)&hMod[dwFunctionAddresses[index]];
+        PyObject *addr = PyInt_FromLong(convAddr);
 
 
-		if (ctr < exp->NumberOfNames) {
-			name = PyString_FromString((char*)&hMod[dwFunctions[ctr]]);
-		}
-		else {
-			name = PyString_FromFormat("Ordinal%i", ordinal);
-		}
+        if (ctr < exp->NumberOfNames) {
+            name = PyString_FromString((char*)&hMod[dwFunctions[ctr]]);
+        }
+        else {
+            name = PyString_FromFormat("Ordinal%i", ordinal);
+        }
 
-		if (!name) {
-			sprintf_s(msg, 128, "Failed to create export name/ordinal for entry #%i", ctr);
-			writeLog(msg);
-			continue;
-		}
+        if (!name) {
+            snprintf(msg, 128, "Failed to create export name/ordinal for entry #%i", ctr);
+            writeLog(msg);
+            continue;
+        }
 
-		PyList_Append(retAddresses, addr);
-		PyList_Append(retNames, name);
+        PyList_Append(retAddresses, addr);
+        PyList_Append(retNames, name);
 
-		//FIXME: replace above by
-		PyObject *entry = Py_BuildValue("(Oii)", name, convAddr, ordinal);
-	}
-	PyObject *returnTable = PyList_New(2);
-	PyList_SET_ITEM(returnTable, 0, retAddresses);
-	PyList_SET_ITEM(returnTable, 1, retNames);
-	writeDebugMsg("emb.enumerateExportedFunctions left");
-	return returnTable;
+        //FIXME: replace above by
+        PyObject *entry = Py_BuildValue("(Oii)", name, convAddr, ordinal);
+    }
+    PyObject *returnTable = PyList_New(2);
+    PyList_SET_ITEM(returnTable, 0, retAddresses);
+    PyList_SET_ITEM(returnTable, 1, retNames);
+    writeDebugMsg("emb.enumerateExportedFunctions left");
+    return returnTable;
 }
 
 
@@ -322,25 +305,25 @@ static PyObject* pybox_enumerateExportedFunctions(PyObject *self, PyObject *args
    will be called before this dll is unloaded.
  */
 static PyObject* pybox_setCleanupFunction(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.setCleanupFunction called");
+    writeDebugMsg("emb.setCleanupFunction called");
     PyObject *result =  PyInt_FromLong(1);
     PyObject *temp = NULL;
 
-	Py_XDECREF(pythonCleanupCallback);
+    Py_XDECREF(pythonCleanupCallback);
 
-	if (PyArg_ParseTuple(args, "O", &pythonCleanupCallback)) {
-		if (!PyCallable_Check(pythonCleanupCallback)) {
-			pythonCleanupCallback = NULL;
+    if (PyArg_ParseTuple(args, "O", &pythonCleanupCallback)) {
+        if (!PyCallable_Check(pythonCleanupCallback)) {
+            pythonCleanupCallback = NULL;
             PyErr_SetString(PyExc_TypeError, "Parameter is not a callable function");
-			writeLog("*** ERROR: parameter not callable");
+            writeLog("*** ERROR: parameter not callable");
             return NULL;
         }
 
-		Py_XINCREF(pythonCleanupCallback);  /* Dispose of previous callback */
-		result = PyInt_FromLong(0);
-		writeDebugMsg("emb.setCleanupFunction: Python Cleanup installed.");
+        Py_XINCREF(pythonCleanupCallback);  /* Dispose of previous callback */
+        result = PyInt_FromLong(0);
+        writeDebugMsg("emb.setCleanupFunction: Python Cleanup installed.");
     }
-	writeDebugMsg("emb.setCleanupFunction left");
+    writeDebugMsg("emb.setCleanupFunction left");
     return result;
 }
 
@@ -354,10 +337,10 @@ static PyObject* pybox_setCleanupFunction(PyObject *self, PyObject *args) {
    when creating the actual hooks in memory.
  */
 static PyObject* pybox_getGenericCallbackAddress(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.getGenericCallbackAddress called");
-	PyObject *returnObj = Py_BuildValue("I", &genericCallback);
-	writeDebugMsg("emb.getGenericCallbackAddress left");
-	return returnObj;
+    writeDebugMsg("emb.getGenericCallbackAddress called");
+    PyObject *returnObj = Py_BuildValue("I", &genericCallback);
+    writeDebugMsg("emb.getGenericCallbackAddress left");
+    return returnObj;
 }
 
 /*
@@ -368,38 +351,38 @@ static PyObject* pybox_getGenericCallbackAddress(PyObject *self, PyObject *args)
    C wrapper for GetProcessId (not included in ctypes) 
 */
 static PyObject* pybox_getProcessId(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.getProcessId called");
-	
-	HANDLE process_handle;
+    writeDebugMsg("emb.getProcessId called");
+    
+    HANDLE process_handle;
 
-	if(!PyArg_ParseTuple(args, "i", (int*)&process_handle)) {
-   	     return NULL;
-	}
+    if(!PyArg_ParseTuple(args, "i", (int*)&process_handle)) {
+            return NULL;
+    }
 
-	int pid = GetProcessId(process_handle);
-	PyObject *returnObj = Py_BuildValue("I", pid);
+    int pid = GetProcessId(process_handle);
+    PyObject *returnObj = Py_BuildValue("I", pid);
 
-	writeDebugMsg("emb.getProcessId left");
-	return returnObj;
+    writeDebugMsg("emb.getProcessId left");
+    return returnObj;
 }
 
 
 /*
-	pybox_setGlobalLock
+    pybox_setGlobalLock
 
-	Python-name: setGlobalLock
+    Python-name: setGlobalLock
 
-	C function for setting the global lock
+    C function for setting the global lock
 */
 static PyObject* pybox_setGlobalLock(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.setGlobalLock called");
+    writeDebugMsg("emb.setGlobalLock called");
 
-	if(!PyArg_ParseTuple(args, "i", (int*)&globalLock)) {
-   	     return NULL;
-	}
+    if(!PyArg_ParseTuple(args, "i", (int*)&globalLock)) {
+            return NULL;
+    }
 
-	writeDebugMsg("emb.setGlobalLock left");
-	return Py_None;
+    writeDebugMsg("emb.setGlobalLock left");
+    return Py_None;
 }
 
 
@@ -413,22 +396,22 @@ static PyObject* pybox_setGlobalLock(PyObject *self, PyObject *args) {
    with other means using python on windows
 */
 static PyObject* pybox_getSelfFilename(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.GetFilename called");
+    writeDebugMsg("emb.GetFilename called");
 
-	char path[FILENAME_MAX];
-	PyObject *result = NULL;
+    char path[FILENAME_MAX];
+    PyObject *result = NULL;
 
-	if (! GetModuleFileNameA(dll_handle,
-							 path,
-							 sizeof(path)) )
-		return Py_None;
+    if (! GetModuleFileNameA(dll_handle,
+                             path,
+                             sizeof(path)) )
+        return Py_None;
 
-	result = PyString_FromString(path);
-	
-	Py_XINCREF(result);
+    result = PyString_FromString(path);
+    
+    Py_XINCREF(result);
 
-	writeDebugMsg("emb.getFilename left");
-	return result;
+    writeDebugMsg("emb.getFilename left");
+    return result;
 }
 
 /* 
@@ -441,15 +424,15 @@ static PyObject* pybox_getSelfFilename(PyObject *self, PyObject *args) {
    image base address, useful e.g. for dumping.
  */
 static PyObject* pybox_getPebAddress(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.getPebAddress called");
-	void *pPeb;
-    __asm {
-        mov EAX, FS:[0x30]
-        mov [pPeb], EAX
-    }			
-	PyObject *returnObj = Py_BuildValue("I", pPeb);
-	writeDebugMsg("emb.getPebAddress left");
-	return returnObj;
+    writeDebugMsg("emb.getPebAddress called");
+    void *pPeb;
+    __asm__ ("\
+        mov eax,fs:[0x30];\
+        mov %0,eax\
+    ":"=g"(pPeb));
+    PyObject *returnObj = Py_BuildValue("I", pPeb);
+    writeDebugMsg("emb.getPebAddress left");
+    return returnObj;
 }
 
 /*
@@ -462,31 +445,31 @@ static PyObject* pybox_getPebAddress(PyObject *self, PyObject *args) {
    be stable.
 */
 static PyObject* pybox_terminate(PyObject *self, PyObject *args) {
-	writeDebugMsg("Terminate PyBox");
+    writeDebugMsg("Terminate PyBox");
 
-	int exitcode;
-	PyObject *result = NULL;
-	PyObject *arglist = NULL;
-
-
-	if(!PyArg_ParseTuple(args, "i", (int*)&exitcode)) {
-   	     return NULL;
-	}
+    int exitcode;
+    PyObject *result = NULL;
+    PyObject *arglist = NULL;
 
 
-	if (pythonCleanupCallback && PyCallable_Check(pythonCleanupCallback)) {
-		arglist = Py_BuildValue("()");
-		result = PyEval_CallObject(pythonCleanupCallback, arglist);
-		Py_XDECREF(arglist);
-		Py_XDECREF(result);
-		Py_XDECREF(pythonCleanupCallback);
-		pythonCleanupCallback = NULL;
-	}
-	
-	Py_Exit(exitcode);
+    if(!PyArg_ParseTuple(args, "i", (int*)&exitcode)) {
+            return NULL;
+    }
 
-	OutputDebugStringA("Terminate done");
-	return result;
+
+    if (pythonCleanupCallback && PyCallable_Check(pythonCleanupCallback)) {
+        arglist = Py_BuildValue("()");
+        result = PyEval_CallObject(pythonCleanupCallback, arglist);
+        Py_XDECREF(arglist);
+        Py_XDECREF(result);
+        Py_XDECREF(pythonCleanupCallback);
+        pythonCleanupCallback = NULL;
+    }
+    
+    Py_Exit(exitcode);
+
+    OutputDebugStringA("Terminate done");
+    return result;
 }
 
 
@@ -497,16 +480,16 @@ static PyObject* pybox_terminate(PyObject *self, PyObject *args) {
 //fixme: remove
 /*
 static PyObject* pybox_mallocWrapper(PyObject *self, PyObject *args) {
-	int numBytes;
-	void *memAddr;
-	writeDebugMsg("emb.mallocWrapper called");
-	if(!PyArg_ParseTuple(args, "i", &numBytes)) {
-   	     return NULL;
-	}
-	memAddr = (void*)malloc(numBytes);
-	PyObject *returnObj = Py_BuildValue("i", &memAddr);
-	writeDebugMsg("emb.mallocWrapper left");
-	return returnObj;
+    int numBytes;
+    void *memAddr;
+    writeDebugMsg("emb.mallocWrapper called");
+    if(!PyArg_ParseTuple(args, "i", &numBytes)) {
+            return NULL;
+    }
+    memAddr = (void*)malloc(numBytes);
+    PyObject *returnObj = Py_BuildValue("i", &memAddr);
+    writeDebugMsg("emb.mallocWrapper left");
+    return returnObj;
 }
 */
 
@@ -514,170 +497,167 @@ static PyObject* pybox_mallocWrapper(PyObject *self, PyObject *args) {
 /* C example remote function for python script */
 // todo: remove
 static PyObject* pybox_sampleCall(PyObject *self, PyObject *args) {
-	writeDebugMsg("emb.sampleCall called");
-	char msg[32];
-	PyObject *result = NULL;
-	int int1;
-	if(!PyArg_ParseTuple(args, "i", &int1)) {
-   	     return NULL;
-	}
-	result = PyInt_FromLong(getTID());
-	sprintf_s(msg, 32, "parsed: %d", int1);
-	writeDebugMsg(msg);
-	writeDebugMsg("emb.sampleCall left");
-	return result;
+    writeDebugMsg("emb.sampleCall called");
+    char msg[32];
+    PyObject *result = NULL;
+    int int1;
+    if(!PyArg_ParseTuple(args, "i", &int1)) {
+            return NULL;
+    }
+    result = PyInt_FromLong(getTID());
+    snprintf(msg, 32, "parsed: %d", int1);
+    writeDebugMsg(msg);
+    writeDebugMsg("emb.sampleCall left");
+    return result;
 }
 
 
 
 static PyMethodDef embeddedMethods[] = { 
-	{"dllAttachPythonCallback", pybox_attachPythonCallback, METH_VARARGS, "attach python callback handler to injected DLL."},
-	{"dllEnumerateExportedFunctions", pybox_enumerateExportedFunctions, METH_VARARGS, "enumerate all exported functions for given module name"},
-	{"dllGetGenericCallbackAddress", pybox_getGenericCallbackAddress, METH_VARARGS, "address of generic callback in injected DLL"},
-	{"dllGetProcessId", pybox_getProcessId, METH_VARARGS, "wrapper for kernel32.GetProcessId (not included in ctypes)"},
-	{"setCleanupFunction", pybox_setCleanupFunction, METH_VARARGS, "Registers a cleanup function that gets called before the interpreter terminates"},
-	{"dllGetFilename", pybox_getSelfFilename, METH_VARARGS, "Returns the path of the dll itself (useful for injection of same dll into other processes)"},
-	{"setGlobalLock", pybox_setGlobalLock, METH_VARARGS, "Set the global lock to True (don't monitor anything) or False (regular monitoring)"},
-	{"dllGetPebAddress", pybox_getPebAddress, METH_VARARGS, "Aquire start address of Process Environment Block."},
-	{"terminate", pybox_terminate, METH_VARARGS, "Terminate pybox from within a hook. Argument is the Python exit code."},
-	{"example", pybox_sampleCall, METH_VARARGS, "example call"},
-	{NULL, NULL, 0, NULL}
+    {"dllAttachPythonCallback", pybox_attachPythonCallback, METH_VARARGS, "attach python callback handler to injected DLL."},
+    {"dllEnumerateExportedFunctions", pybox_enumerateExportedFunctions, METH_VARARGS, "enumerate all exported functions for given module name"},
+    {"dllGetGenericCallbackAddress", pybox_getGenericCallbackAddress, METH_VARARGS, "address of generic callback in injected DLL"},
+    {"dllGetProcessId", pybox_getProcessId, METH_VARARGS, "wrapper for kernel32.GetProcessId (not included in ctypes)"},
+    {"setCleanupFunction", pybox_setCleanupFunction, METH_VARARGS, "Registers a cleanup function that gets called before the interpreter terminates"},
+    {"dllGetFilename", pybox_getSelfFilename, METH_VARARGS, "Returns the path of the dll itself (useful for injection of same dll into other processes)"},
+    {"setGlobalLock", pybox_setGlobalLock, METH_VARARGS, "Set the global lock to True (don't monitor anything) or False (regular monitoring)"},
+    {"dllGetPebAddress", pybox_getPebAddress, METH_VARARGS, "Aquire start address of Process Environment Block."},
+    {"terminate", pybox_terminate, METH_VARARGS, "Terminate pybox from within a hook. Argument is the Python exit code."},
+    {"example", pybox_sampleCall, METH_VARARGS, "example call"},
+    {NULL, NULL, 0, NULL}
 };
 
 
 /************ DllMain - init and cleanup *************/
 
-BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved) {	
+BOOL WINAPI DllMain(HINSTANCE hinst, DWORD dwReason, LPVOID reserved) {
+    PyObject *Py_logfile;
+    dll_handle = hinst;
 
-	PyObject *Py_logfile;
+    if (dwReason == DLL_PROCESS_ATTACH) {
 
-	//MessageBoxA(NULL, "IN", "Error", NULL);
 
-	dll_handle = hinst;
+        if (logFile == NULL) {
 
-	if (dwReason == DLL_PROCESS_ATTACH) {
+            LOG_FILE_PATH = (char*) malloc(MAX_PATH);
+            if (!LOG_FILE_PATH) {
+                MessageBoxA(NULL, "Memory allocation failed", "Error", MB_ICONERROR);
+                return FALSE;
+            }
 
-		if (logFile==NULL) {
+            if (! GetEnvironmentVariableA("PYBOX_LOG", LOG_FILE_PATH, MAX_PATH -1 )){
+                MessageBoxA(NULL, "Environment variable PYBOX_LOG not set!", "Error", MB_ICONERROR);
+                free(LOG_FILE_PATH);
+                return FALSE;
+            }
+        }
 
-			LOG_FILE_PATH = (char*) malloc(MAX_PATH);
-			if (!LOG_FILE_PATH) {
-				MessageBoxA(NULL, "Memory allocation failed", "Error", MB_ICONERROR);
-				return FALSE;
-			}
+        if (PYBOX_FILE == NULL) {
+            PYBOX_FILE = (char*) malloc(MAX_PATH);
+            if (!PYBOX_FILE) {
+                MessageBoxA(NULL, "Memory allocation failed", "Error", MB_ICONERROR);
+                return FALSE;
+            }
 
-			if (! GetEnvironmentVariableA("PYBOX_LOG", LOG_FILE_PATH, MAX_PATH -1 )){
-				MessageBoxA(NULL, "Environment variable PYBOX_LOG not set!", "Error", MB_ICONERROR);
-				free(LOG_FILE_PATH);
-				return FALSE;
-			}
-		}
+            if (! GetEnvironmentVariableA("PYBOX_FILE", PYBOX_FILE, MAX_PATH -1 )){
+                MessageBoxA(NULL, "Environment variable PYBOX_FILE not set!", "Error", MB_ICONERROR);
+                free(PYBOX_FILE);
+                return FALSE;
+            }
+        }
 
-		if (PYBOX_FILE == NULL) {
-			PYBOX_FILE = (char*) malloc(MAX_PATH);
-			if (!PYBOX_FILE) {
-				MessageBoxA(NULL, "Memory allocation failed", "Error", MB_ICONERROR);
-				return FALSE;
-			}
+        if (!Py_IsInitialized()) {
+            //MessageBoxA(NULL, "starting", "", NULL);
+            Py_InitializeEx(0);
+            if (!Py_IsInitialized())
+            {
+                MessageBoxA(NULL, "Failed to start Python interpreter", "Error", MB_ICONERROR);
+                return FALSE;
+            }
 
-			if (! GetEnvironmentVariableA("PYBOX_FILE", PYBOX_FILE, MAX_PATH -1 )){
-				MessageBoxA(NULL, "Environment variable PYBOX_FILE not set!", "Error", MB_ICONERROR);
-				free(PYBOX_FILE);
-				return FALSE;
-			}
-		}
-
-		if (!Py_IsInitialized()) {		
-			//MessageBoxA(NULL, "starting", "", NULL);
-			Py_InitializeEx(0);
-			if (!Py_IsInitialized())
-			{
-				MessageBoxA(NULL, "Failed to start Python interpreter", "Error", NULL);
-				return FALSE;
-			}	
 #ifdef USE_THREADS
-			PyEval_InitThreads();
+            PyEval_InitThreads();
 #endif
-			
-		}
+
+        }
 
 #ifdef USE_THREADS
-		InitializeCriticalSection(&thread_lock_section);
-		InitializeCriticalSection(&python_GIL_section);
+        InitializeCriticalSection(&thread_lock_section);
+        InitializeCriticalSection(&python_GIL_section);
 
-		EnterCriticalSection(&python_GIL_section);
-		PyThreadState *tstate = PyEval_SaveThread();
-		PyGILState_STATE state = PyGILState_Ensure();
+        EnterCriticalSection(&python_GIL_section);
+        PyThreadState *tstate = PyEval_SaveThread();
+        PyGILState_STATE state = PyGILState_Ensure();
 #endif
-		char filename[64]; // filename from process id
-		int proc_id = GetCurrentProcessId();
-		sprintf_s(filename, 64, "%s%d_log.txt", LOG_FILE_PATH, proc_id);
+        char filename[64]; // filename from process id
+        int proc_id = GetCurrentProcessId();
+        snprintf(filename, 64, "%s%d_log.txt", LOG_FILE_PATH, proc_id);
 
-		Py_logfile = PyFile_FromString(filename, "w");
-		if ( !Py_logfile){
-			MessageBoxA(NULL, "Unable to open logfile", "Error", NULL);
-		}
-		else {			
-			logFile = PyFile_AsFile(Py_logfile);
+        Py_logfile = PyFile_FromString(filename, "w");
+        if ( !Py_logfile){
+            MessageBoxA(NULL, "Unable to open logfile", "Error", NULL);
+        }
+        else {            
+            logFile = PyFile_AsFile(Py_logfile);
 
-			Py_INCREF(Py_logfile);
-			PySys_SetObject("stderr", Py_logfile);			
-			writeLog("Logging active");
-		}
-		
-		Py_InitModule("emb", embeddedMethods);
-		writeLog("embedded python module initialized.");
-		PyObject* PyFileObject = PyFile_FromString(PYBOX_FILE, "r");
-		if (PyFileObject == NULL) {
-			writeLog("*** ERROR *** main: loading starter.py");					
-		}
-		else {			
-			callbackLock = 1; //no callbacks while we start hooking
-			writeLog("Running starter.py");
-			if (PyRun_SimpleFile(PyFile_AsFile(PyFileObject), PYBOX_FILE) == -1){
-				writeLog("Execution of starter.py failed");
-			}
-			else
-			   writeLog("starter.py finished");
-			writeLog("done");
-			Py_DECREF(PyFileObject);
-			callbackLock = 0; //ready to go
-		}		
+            Py_INCREF(Py_logfile);
+            PySys_SetObject("stderr", Py_logfile);            
+            writeLog("Logging active");
+        }
+        
+        Py_InitModule("emb", embeddedMethods);
+        writeLog("embedded python module initialized.");
+        PyObject* PyFileObject = PyFile_FromString(PYBOX_FILE, "r");
+        if (PyFileObject == NULL) {
+            writeLog("*** ERROR *** main: loading starter.py");                    
+        }
+        else {            
+            callbackLock = 1; //no callbacks while we start hooking
+            writeLog("Running starter.py");
+            if (PyRun_SimpleFile(PyFile_AsFile(PyFileObject), PYBOX_FILE) == -1){
+                writeLog("Execution of starter.py failed");
+            }
+            else
+               writeLog("starter.py finished");
+            writeLog("done");
+            Py_DECREF(PyFileObject);
+            callbackLock = 0; //ready to go
+        }        
 
 
 #ifdef USE_THREADS
-		PyGILState_Release(state);
-		LeaveCriticalSection(&python_GIL_section);
-#endif	
-	}
-	if (dwReason == DLL_THREAD_ATTACH) {
-		OutputDebugStringA("Thread attached\n");
-	}    
-	if (dwReason == DLL_THREAD_DETACH) {
-		OutputDebugStringA("Thread detached\n");
-	}
-	if (dwReason == DLL_PROCESS_DETACH) {	
-		OutputDebugStringA("Process detach");
+        PyGILState_Release(state);
+        LeaveCriticalSection(&python_GIL_section);
+#endif
+    }
+    if (dwReason == DLL_THREAD_ATTACH) {
+        OutputDebugStringA("Thread attached\n");
+    }
+    if (dwReason == DLL_THREAD_DETACH) {
+        OutputDebugStringA("Thread detached\n");
+    }
+    if (dwReason == DLL_PROCESS_DETACH) {    
+        OutputDebugStringA("Process detach");
 
-		PyObject *result = NULL;
-		PyObject *arglist = NULL;
-		if (pythonCleanupCallback) {
+        PyObject *result = NULL;
+        PyObject *arglist = NULL;
+        if (pythonCleanupCallback) {
 #ifdef USE_THREADS
-			EnterCriticalSection(&python_GIL_section);
-			PyGILState_STATE state = PyGILState_Ensure();
-#endif		
-			if (PyCallable_Check(pythonCleanupCallback)) {
-				arglist = Py_BuildValue("()");
-				result = PyEval_CallObject(pythonCleanupCallback, arglist);
-				Py_XDECREF(arglist);
-				Py_XDECREF(result);
-			}
+            EnterCriticalSection(&python_GIL_section);
+            PyGILState_STATE state = PyGILState_Ensure();
+#endif
+            if (PyCallable_Check(pythonCleanupCallback)) {
+                arglist = Py_BuildValue("()");
+                result = PyEval_CallObject(pythonCleanupCallback, arglist);
+                Py_XDECREF(arglist);
+                Py_XDECREF(result);
+            }
 #ifdef USE_THREADS
-			PyGILState_Release(state);
-			LeaveCriticalSection(&python_GIL_section);			
-#endif	
-		}
-		OutputDebugStringA("PyBox: All done");
-	}
-	return TRUE;
+            PyGILState_Release(state);
+            LeaveCriticalSection(&python_GIL_section);
+#endif
+        }
+        OutputDebugStringA("PyBox: All done");
+    }
+    return TRUE;
 }
-
